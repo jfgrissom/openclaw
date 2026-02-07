@@ -91,10 +91,12 @@ export function normalizeReplyPayload(
     text = enrichedPayload.text;
   }
 
-  // Resolve template variables in responsePrefix if context is provided
+  // Resolve template variables in responsePrefix if context is provided.
+  // responsePrefixOverride (from responsePrefixOnFallback) takes priority when set.
+  const prefixTemplate = opts.responsePrefixContext?.responsePrefixOverride ?? opts.responsePrefix;
   const effectivePrefix = opts.responsePrefixContext
-    ? resolveResponsePrefixTemplate(opts.responsePrefix, opts.responsePrefixContext)
-    : opts.responsePrefix;
+    ? resolveResponsePrefixTemplate(prefixTemplate, opts.responsePrefixContext)
+    : prefixTemplate;
 
   if (
     effectivePrefix &&

@@ -105,6 +105,16 @@ export type MessagesConfig = {
    * Default: none
    */
   responsePrefix?: string;
+  /**
+   * Response prefix shown ONLY when a fallback model is used (not the primary).
+   * Supports the same template variables as `responsePrefix`: `{model}`, `{provider}`, etc.
+   *
+   * Example: `"⚠️ [{model}]"` → shows `⚠️ [claude-sonnet-4-5]` only on fallback.
+   * When the primary model responds, no prefix is added (unless responsePrefix is also set).
+   *
+   * Default: none
+   */
+  responsePrefixOnFallback?: string;
   groupChat?: GroupChatConfig;
   queue?: QueueConfig;
   /** Debounce rapid inbound messages per sender (global + per-channel overrides). */

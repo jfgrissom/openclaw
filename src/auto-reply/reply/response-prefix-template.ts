@@ -16,6 +16,12 @@ export type ResponsePrefixContext = {
   thinkingLevel?: string;
   /** Agent identity name */
   identityName?: string;
+  /**
+   * When set, overrides the configured responsePrefix for this reply.
+   * Used by responsePrefixOnFallback to inject a prefix only when
+   * a fallback model is active.
+   */
+  responsePrefixOverride?: string;
 };
 
 // Regex pattern for template variables: {variableName} or {variable.name}

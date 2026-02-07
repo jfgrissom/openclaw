@@ -387,6 +387,46 @@ export function formatAssistantErrorText(
   return raw.length > 600 ? `${raw.slice(0, 600)}…` : raw;
 }
 
+/**
+ * Heuristic: does this text look like a raw API error rather than conversational content?
+ *
+ * Real API errors are typically:
+ * - Short (under 800 chars)
+ * - Single block of text (no paragraph breaks)
+ * - No markdown structure (headers, lists, code blocks, links)
+ * - No conversational patterns (sentences with punctuation variety)
+ *
+ * Agent replies that DISCUSS errors have structure: paragraphs, markdown,
+ * explanations. Without this gate, mentioning an error in conversation
+ * triggers the very error being discussed — a self-referential feedback loop.
+ *
+ * See: https://github.com/openclaw/openclaw/issues/3594
+ */
+function looksLikeRealApiError(text: string): boolean {
+  // Real API errors are short
+  if (text.length > 800) {
+    return false;
+  }
+  // Conversational text has paragraph breaks
+  if (text.includes("\n\n")) {
+    return false;
+  }
+  // Markdown structure = conversational content, not raw errors
+  if (/^#{1,6}\s/m.test(text)) {
+    return false; // headers
+  }
+  if (/^[-*]\s/m.test(text)) {
+    return false; // lists
+  }
+  if (/```/.test(text)) {
+    return false; // code blocks
+  }
+  if (/\[.+\]\(.+\)/.test(text)) {
+    return false; // markdown links
+  }
+  return true;
+}
+
 export function sanitizeUserFacingText(text: string): string {
   if (!text) {
     return text;
@@ -397,37 +437,45 @@ export function sanitizeUserFacingText(text: string): string {
     return stripped;
   }
 
-  if (/incorrect role information|roles must alternate/i.test(trimmed)) {
-    return (
-      "Message ordering conflict - please try again. " +
-      "If this persists, use /new to start a fresh session."
-    );
-  }
-
-  // 🍗 Fried Chicken Fix: Don't classify as context overflow if it's also a failover error
-  if (isContextOverflowError(trimmed) && !isFailoverErrorMessage(trimmed)) {
-    return (
-      "Context overflow: prompt too large for the model. " +
-      "Try again with less input or a larger-context model."
-    );
-  }
-
-  if (isBillingErrorMessage(trimmed)) {
-    return BILLING_ERROR_USER_MESSAGE;
-  }
-
+  // Structural checks (JSON payloads, HTTP status lines) are always safe —
+  // they match on structure, not substrings, so they don't false-positive
+  // on conversational content.
   if (isRawApiErrorPayload(trimmed) || isLikelyHttpErrorText(trimmed)) {
     return formatRawAssistantErrorForUi(trimmed);
   }
 
-  if (ERROR_PREFIX_RE.test(trimmed)) {
-    if (isOverloadedErrorMessage(trimmed) || isRateLimitErrorMessage(trimmed)) {
-      return "The AI service is temporarily overloaded. Please try again in a moment.";
+  // Substring-based error pattern matching is ONLY applied to text that
+  // structurally looks like a raw API error. This prevents agent replies
+  // that discuss errors from being intercepted. (#3594)
+  if (looksLikeRealApiError(trimmed)) {
+    if (/incorrect role information|roles must alternate/i.test(trimmed)) {
+      return (
+        "Message ordering conflict - please try again. " +
+        "If this persists, use /new to start a fresh session."
+      );
     }
-    if (isTimeoutErrorMessage(trimmed)) {
-      return "LLM request timed out.";
+
+    // 🍗 Fried Chicken Fix: Don't classify as context overflow if it's also a failover error
+    if (isContextOverflowError(trimmed) && !isFailoverErrorMessage(trimmed)) {
+      return (
+        "Context overflow: prompt too large for the model. " +
+        "Try again with less input or a larger-context model."
+      );
     }
-    return formatRawAssistantErrorForUi(trimmed);
+
+    if (isBillingErrorMessage(trimmed)) {
+      return BILLING_ERROR_USER_MESSAGE;
+    }
+
+    if (ERROR_PREFIX_RE.test(trimmed)) {
+      if (isOverloadedErrorMessage(trimmed) || isRateLimitErrorMessage(trimmed)) {
+        return "The AI service is temporarily overloaded. Please try again in a moment.";
+      }
+      if (isTimeoutErrorMessage(trimmed)) {
+        return "LLM request timed out.";
+      }
+      return formatRawAssistantErrorForUi(trimmed);
+    }
   }
 
   return collapseConsecutiveDuplicateBlocks(stripped);

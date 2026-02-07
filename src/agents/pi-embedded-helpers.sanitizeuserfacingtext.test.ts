@@ -59,4 +59,47 @@ describe("sanitizeUserFacingText", () => {
     const result = sanitizeUserFacingText(pure);
     expect(result).toContain("prompt too large for the model");
   });
+
+  // Error source detection (#3594): agent replies discussing errors should not be intercepted
+  it("does not intercept agent replies that discuss context overflow", () => {
+    const agentReply =
+      "The error you're seeing is a context overflow. This happens when the prompt is too long.\n\n" +
+      "Here are some ways to fix it:\n\n" +
+      "- Try a shorter message\n" +
+      "- Use a larger-context model";
+    expect(sanitizeUserFacingText(agentReply)).not.toContain(
+      "prompt too large for the model. Try again",
+    );
+  });
+
+  it("does not intercept agent replies with markdown that mention errors", () => {
+    const agentReply =
+      "## Understanding the Error\n\n" +
+      'The "context length exceeded" message means your conversation is too long.';
+    expect(sanitizeUserFacingText(agentReply)).not.toContain("prompt too large for the model");
+  });
+
+  it("does not intercept long explanations about role ordering", () => {
+    const agentReply =
+      "The roles must alternate between user and assistant in the API. " +
+      "This is a requirement of the Anthropic Messages API.\n\n" +
+      "When this breaks, you see 'incorrect role information' errors. " +
+      "The fix is to use /new to reset the session.";
+    expect(sanitizeUserFacingText(agentReply)).not.toContain("Message ordering conflict");
+  });
+
+  it("still catches short real API errors", () => {
+    expect(sanitizeUserFacingText("context length exceeded")).toContain(
+      "prompt too large for the model",
+    );
+    expect(
+      sanitizeUserFacingText('messages: roles must alternate between "user" and "assistant"'),
+    ).toContain("Message ordering conflict");
+  });
+
+  it("still catches JSON API error payloads regardless of length", () => {
+    const payload =
+      '{"type":"error","error":{"message":"Something exploded","type":"server_error"}}';
+    expect(sanitizeUserFacingText(payload)).toBe("LLM error server_error: Something exploded");
+  });
 });

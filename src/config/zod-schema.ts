@@ -111,10 +111,17 @@ const MemoryQmdSchema = z
   })
   .strict();
 
+const MemoryPostgresSchema = z
+  .object({
+    connectionString: z.string(),
+  })
+  .strict();
+
 const MemorySchema = z
   .object({
-    backend: z.union([z.literal("builtin"), z.literal("qmd")]).optional(),
+    backend: z.union([z.literal("builtin"), z.literal("qmd"), z.literal("postgres")]).optional(),
     citations: z.union([z.literal("auto"), z.literal("on"), z.literal("off")]).optional(),
+    postgres: MemoryPostgresSchema.optional(),
     qmd: MemoryQmdSchema.optional(),
   })
   .strict()

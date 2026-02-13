@@ -21,6 +21,39 @@ export async function getMemorySearchManager(params: {
   agentId: string;
 }): Promise<MemorySearchManagerResult> {
   const resolved = resolveMemoryBackendConfig(params);
+
+  // PostgreSQL backend — Strategy Pattern: same MemorySearchManager interface,
+  // different storage engine. Falls back to SQLite if Postgres is unavailable.
+  if (resolved.backend === "postgres") {
+    const pgConfig = params.cfg.memory?.postgres;
+    if (pgConfig?.connectionString) {
+      try {
+        const { PostgresMemoryManager } = await import("./postgres-manager.js");
+        const primary = await PostgresMemoryManager.get({
+          ...params,
+          connectionString: pgConfig.connectionString,
+        });
+        if (primary) {
+          const wrapper = new FallbackMemoryManager({
+            primary,
+            fallbackFactory: async () => {
+              const { MemoryIndexManager } = await import("./manager.js");
+              return await MemoryIndexManager.get(params);
+            },
+          });
+          return { manager: wrapper };
+        }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        log.warn(`postgres memory unavailable; falling back to builtin: ${message}`);
+      }
+    } else {
+      log.warn(
+        "postgres backend selected but no connectionString configured; falling back to builtin",
+      );
+    }
+  }
+
   if (resolved.backend === "qmd" && resolved.qmd) {
     const cacheKey = buildQmdCacheKey(params.agentId, resolved.qmd);
     const cached = QMD_MANAGER_CACHE.get(cacheKey);

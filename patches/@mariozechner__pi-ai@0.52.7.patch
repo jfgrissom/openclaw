@@ -1,0 +1,39 @@
+diff --git a/dist/providers/anthropic.js b/dist/providers/anthropic.js
+index 1954cc92887793559c3b73c15bb84db4b5af0d93..756272c2a3e6fe7cd0cb192c394b1e675eb191cb 100644
+--- a/dist/providers/anthropic.js
++++ b/dist/providers/anthropic.js
+@@ -352,11 +352,16 @@ export const streamSimpleAnthropic = (model, context, options) => {
+     // For Opus 4.6+: use adaptive thinking with effort level
+     // For older models: use budget-based thinking
+     if (supportsAdaptiveThinking(model.id)) {
++        // Patched by Canti: use budget-based thinking instead of unsupported "adaptive" type
++        const effortToBudget = { low: 2048, medium: 8192, high: 32768, max: 65536 };
+         const effort = mapThinkingLevelToEffort(options.reasoning);
++        const budget = effortToBudget[effort] || 8192;
++        const adjusted = adjustMaxTokensForThinking(base.maxTokens || 0, model.maxTokens, options.reasoning, options.thinkingBudgets);
+         return streamAnthropic(model, context, {
+             ...base,
++            maxTokens: adjusted.maxTokens,
+             thinkingEnabled: true,
+-            effort,
++            thinkingBudgetTokens: adjusted.thinkingBudget || budget,
+         });
+     }
+     const adjusted = adjustMaxTokensForThinking(base.maxTokens || 0, model.maxTokens, options.reasoning, options.thinkingBudgets);
+@@ -451,11 +456,11 @@ function buildParams(model, context, isOAuthToken, options) {
+     // Configure thinking mode: adaptive (Opus 4.6+) or budget-based (older models)
+     if (options?.thinkingEnabled && model.reasoning) {
+         if (supportsAdaptiveThinking(model.id)) {
+-            // Adaptive thinking: Claude decides when and how much to think
+-            params.thinking = { type: "adaptive" };
+-            if (options.effort) {
+-                params.output_config = { effort: options.effort };
+-            }
++            // Patched by Canti: adaptive type not supported, use enabled with budget
++            params.thinking = {
++                type: "enabled",
++                budget_tokens: options.thinkingBudgetTokens || 8192,
++            };
+         }
+         else {
+             // Budget-based thinking for older models

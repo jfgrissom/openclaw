@@ -1,12 +1,17 @@
 import type { SessionSendPolicyConfig } from "./types.base.js";
 
-export type MemoryBackend = "builtin" | "qmd";
+export type MemoryBackend = "builtin" | "qmd" | "postgres";
 export type MemoryCitationsMode = "auto" | "on" | "off";
 export type MemoryQmdSearchMode = "query" | "search" | "vsearch";
+
+export type MemoryPostgresConfig = {
+  connectionString: string;
+};
 
 export type MemoryConfig = {
   backend?: MemoryBackend;
   citations?: MemoryCitationsMode;
+  postgres?: MemoryPostgresConfig;
   qmd?: MemoryQmdConfig;
 };
 

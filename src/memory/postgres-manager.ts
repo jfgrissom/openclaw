@@ -564,7 +564,7 @@ export class PostgresMemoryManager implements MemorySearchManager {
         `INSERT INTO files (path, source, hash, mtime, size)
          VALUES ($1, 'memory', $2, $3, $4)
          ON CONFLICT (path) DO UPDATE SET hash = $2, mtime = $3, size = $4`,
-        [fileEntry.path, fileEntry.hash, fileEntry.mtimeMs, fileEntry.size],
+        [fileEntry.path, fileEntry.hash, Math.floor(fileEntry.mtimeMs), fileEntry.size],
       );
 
       for (let i = 0; i < chunks.length; i++) {

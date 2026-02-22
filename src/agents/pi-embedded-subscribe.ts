@@ -68,6 +68,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     messagingToolSentTargets: [],
     pendingMessagingTexts: new Map(),
     pendingMessagingTargets: new Map(),
+    filteredGhostCalls: new Set(),
   };
 
   const assistantTexts = state.assistantTexts;

@@ -51,6 +51,23 @@ export async function handleToolExecutionStart(
   const toolCallId = String(evt.toolCallId);
   const args = evt.args;
 
+  // Filter ghost tool calls — model abandoned a parallel call mid-generation,
+  // leaving an empty args stub ({}) that would fail schema validation.
+  // We filter at the handler (observation) layer; pi-agent-core still processes
+  // the call internally, but we prevent the error from surfacing to the user.
+  const isEmptyArgs =
+    args == null ||
+    (typeof args === "object" &&
+      !Array.isArray(args) &&
+      Object.keys(args as Record<string, unknown>).length === 0);
+  if (isEmptyArgs) {
+    ctx.state.filteredGhostCalls.add(toolCallId);
+    ctx.log.debug(
+      `Filtered ghost tool call: tool=${toolName} toolCallId=${toolCallId} (empty args, likely abandoned parallel call)`,
+    );
+    return;
+  }
+
   if (toolName === "read") {
     const record = args && typeof args === "object" ? (args as Record<string, unknown>) : {};
     const filePath = typeof record.path === "string" ? record.path.trim() : "";
@@ -121,8 +138,14 @@ export function handleToolExecutionUpdate(
     partialResult?: unknown;
   },
 ) {
-  const toolName = normalizeToolName(String(evt.toolName));
   const toolCallId = String(evt.toolCallId);
+
+  // Skip updates for ghost tool calls filtered in handleToolExecutionStart.
+  if (ctx.state.filteredGhostCalls.has(toolCallId)) {
+    return;
+  }
+
+  const toolName = normalizeToolName(String(evt.toolName));
   const partial = evt.partialResult;
   const sanitized = sanitizeToolResult(partial);
   emitAgentEvent({
@@ -154,8 +177,17 @@ export function handleToolExecutionEnd(
     result?: unknown;
   },
 ) {
-  const toolName = normalizeToolName(String(evt.toolName));
   const toolCallId = String(evt.toolCallId);
+
+  // Skip end events for ghost tool calls filtered in handleToolExecutionStart.
+  // Clean up the tracking set to prevent unbounded growth.
+  if (ctx.state.filteredGhostCalls.has(toolCallId)) {
+    ctx.state.filteredGhostCalls.delete(toolCallId);
+    ctx.log.debug(`Dropped ghost tool end event: toolCallId=${toolCallId}`);
+    return;
+  }
+
+  const toolName = normalizeToolName(String(evt.toolName));
   const isError = Boolean(evt.isError);
   const result = evt.result;
   const isToolError = isError || isToolResultError(result);

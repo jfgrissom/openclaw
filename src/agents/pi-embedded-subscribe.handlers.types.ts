@@ -60,6 +60,9 @@ export type EmbeddedPiSubscribeState = {
   messagingToolSentTargets: MessagingToolSend[];
   pendingMessagingTexts: Map<string, string>;
   pendingMessagingTargets: Map<string, MessagingToolSend>;
+
+  /** Tool call IDs filtered as ghost calls (abandoned parallel stubs with empty args). */
+  filteredGhostCalls: Set<string>;
 };
 
 export type EmbeddedPiSubscribeContext = {

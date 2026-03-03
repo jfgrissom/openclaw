@@ -16,13 +16,29 @@
  * - DIP: Depends on MemorySearchManager interface, not SQLite
  */
 
-import chokidar, { type FSWatcher } from "chokidar";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import chokidar, { type FSWatcher } from "chokidar";
 import pg from "pg";
+import { resolveAgentDir, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import type { ResolvedMemorySearchConfig } from "../agents/memory-search.js";
+import { resolveMemorySearchConfig } from "../agents/memory-search.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
+import { truncateUtf16Safe } from "../utils.js";
+import { createEmbeddingProvider, type EmbeddingProvider } from "./embeddings.js";
+import {
+  buildFileEntry,
+  chunkMarkdown,
+  cosineSimilarity,
+  hashText,
+  isMemoryPath,
+  listMemoryFiles,
+  normalizeExtraMemoryPaths,
+  parseEmbedding,
+  type MemoryFileEntry,
+} from "./internal.js";
 import type {
   MemoryEmbeddingProbeResult,
   MemoryProviderStatus,
@@ -31,26 +47,6 @@ import type {
   MemorySource,
   MemorySyncProgressUpdate,
 } from "./types.js";
-import { resolveAgentDir, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
-import { resolveMemorySearchConfig } from "../agents/memory-search.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
-import { resolveUserPath } from "../utils.js";
-import { truncateUtf16Safe } from "../utils.js";
-import { createEmbeddingProvider, type EmbeddingProvider } from "./embeddings.js";
-import {
-  buildFileEntry,
-  chunkMarkdown,
-  cosineSimilarity,
-  ensureDir,
-  hashText,
-  isMemoryPath,
-  listMemoryFiles,
-  normalizeExtraMemoryPaths,
-  parseEmbedding,
-  runWithConcurrency,
-  type MemoryChunk,
-  type MemoryFileEntry,
-} from "./internal.js";
 
 const log = createSubsystemLogger("memory-pg");
 
@@ -97,6 +93,13 @@ export class PostgresMemoryManager implements MemorySearchManager {
       fallback: settings.fallback,
       local: settings.local,
     });
+
+    if (!providerResult.provider) {
+      log.warn(
+        `No embedding provider available for PostgreSQL memory backend: ${providerResult.providerUnavailableReason ?? "unknown reason"}`,
+      );
+      return null;
+    }
 
     const manager = new PostgresMemoryManager({
       cacheKey: key,
@@ -206,7 +209,7 @@ export class PostgresMemoryManager implements MemorySearchManager {
         this.vectorReady = true;
         log.info("pgvector initialized successfully");
       } catch (err) {
-        log.warn(`pgvector not available: ${err}`);
+        log.warn(`pgvector not available: ${String(err)}`);
       }
     } finally {
       client.release();
@@ -230,14 +233,16 @@ export class PostgresMemoryManager implements MemorySearchManager {
     }
 
     const cleaned = query.trim();
-    if (!cleaned) return [];
+    if (!cleaned) {
+      return [];
+    }
 
     const minScore = opts?.minScore ?? this.settings.query.minScore;
     const maxResults = opts?.maxResults ?? this.settings.query.maxResults;
 
     // Generate query embedding
     const queryVec = await this.embedText(cleaned);
-    const hasVector = queryVec.length > 0 && queryVec.some((v) => v !== 0);
+    const hasVector = queryVec.some((v) => v !== 0);
 
     // Vector search via pgvector
     let vectorResults: MemorySearchResult[] = [];
@@ -318,7 +323,7 @@ export class PostgresMemoryManager implements MemorySearchManager {
         return { row, score };
       })
       .filter((entry) => Number.isFinite(entry.score))
-      .sort((a, b) => b.score - a.score)
+      .toSorted((a, b) => b.score - a.score)
       .slice(0, limit);
 
     return scored.map((entry) => ({
@@ -339,7 +344,9 @@ export class PostgresMemoryManager implements MemorySearchManager {
       .filter(Boolean)
       .join(" & ");
 
-    if (!tsquery) return [];
+    if (!tsquery) {
+      return [];
+    }
 
     const sourceFilter = this.buildSourceFilter();
     let sql = `
@@ -393,7 +400,7 @@ export class PostgresMemoryManager implements MemorySearchManager {
       }
     }
 
-    return Array.from(seen.values()).sort((a, b) => b.score - a.score);
+    return Array.from(seen.values()).toSorted((a, b) => b.score - a.score);
   }
 
   // ── readFile (filesystem — identical logic to SQLite manager) ───────────
@@ -404,7 +411,9 @@ export class PostgresMemoryManager implements MemorySearchManager {
     lines?: number;
   }): Promise<{ text: string; path: string }> {
     const rawPath = params.relPath.trim();
-    if (!rawPath) throw new Error("path required");
+    if (!rawPath) {
+      throw new Error("path required");
+    }
 
     const absPath = path.isAbsolute(rawPath)
       ? path.resolve(rawPath)
@@ -424,7 +433,9 @@ export class PostgresMemoryManager implements MemorySearchManager {
       for (const additionalPath of additionalPaths) {
         try {
           const stat = await fs.lstat(additionalPath);
-          if (stat.isSymbolicLink()) continue;
+          if (stat.isSymbolicLink()) {
+            continue;
+          }
           if (stat.isDirectory()) {
             if (absPath === additionalPath || absPath.startsWith(`${additionalPath}${path.sep}`)) {
               allowedAdditional = true;
@@ -440,14 +451,22 @@ export class PostgresMemoryManager implements MemorySearchManager {
       }
     }
 
-    if (!allowedWorkspace && !allowedAdditional) throw new Error("path required");
-    if (!absPath.endsWith(".md")) throw new Error("path required");
+    if (!allowedWorkspace && !allowedAdditional) {
+      throw new Error("path required");
+    }
+    if (!absPath.endsWith(".md")) {
+      throw new Error("path required");
+    }
 
     const stat = await fs.lstat(absPath);
-    if (stat.isSymbolicLink() || !stat.isFile()) throw new Error("path required");
+    if (stat.isSymbolicLink() || !stat.isFile()) {
+      throw new Error("path required");
+    }
 
     const content = await fs.readFile(absPath, "utf-8");
-    if (!params.from && !params.lines) return { text: content, path: relPath };
+    if (!params.from && !params.lines) {
+      return { text: content, path: relPath };
+    }
 
     const lines = content.split("\n");
     const start = Math.max(1, params.from ?? 1);
@@ -463,7 +482,9 @@ export class PostgresMemoryManager implements MemorySearchManager {
     force?: boolean;
     progress?: (update: MemorySyncProgressUpdate) => void;
   }): Promise<void> {
-    if (this.syncing) return this.syncing;
+    if (this.syncing) {
+      return this.syncing;
+    }
     this.syncing = this.runSync(params).finally(() => {
       this.syncing = null;
     });
@@ -481,6 +502,9 @@ export class PostgresMemoryManager implements MemorySearchManager {
     for (const absPath of memoryFiles) {
       try {
         const entry = await buildFileEntry(absPath, this.workspaceDir);
+        if (!entry) {
+          continue;
+        }
         // Check if file has changed
         const existing = await this.pool.query("SELECT hash FROM files WHERE path = $1", [
           entry.path,
@@ -509,7 +533,7 @@ export class PostgresMemoryManager implements MemorySearchManager {
         completed++;
         progress?.({ completed, total: filesToProcess.length, label: fileEntry.path });
       } catch (err) {
-        log.warn(`Failed to index ${fileEntry.path}: ${err}`);
+        log.warn(`Failed to index ${fileEntry.path}: ${String(err)}`);
       }
     }
 
@@ -601,7 +625,7 @@ export class PostgresMemoryManager implements MemorySearchManager {
               [chunkId, vecStr],
             )
             .catch((err) => {
-              log.warn(`Failed to insert vector for ${chunkId}: ${err}`);
+              log.warn(`Failed to insert vector for ${chunkId}: ${String(err)}`);
             });
         }
       }
@@ -622,7 +646,7 @@ export class PostgresMemoryManager implements MemorySearchManager {
       const result = await this.provider.embedQuery(text);
       return result;
     } catch (err) {
-      log.warn(`Embedding failed: ${err}`);
+      log.warn(`Embedding failed: ${String(err)}`);
       return [];
     }
   }
@@ -678,7 +702,9 @@ export class PostgresMemoryManager implements MemorySearchManager {
   }
 
   async close(): Promise<void> {
-    if (this.closed) return;
+    if (this.closed) {
+      return;
+    }
     this.closed = true;
     if (this.watcher) {
       await this.watcher.close();
@@ -691,7 +717,9 @@ export class PostgresMemoryManager implements MemorySearchManager {
   // ── File watcher ────────────────────────────────────────────────────────
 
   private ensureWatcher(): void {
-    if (this.watcher || !this.sources.has("memory")) return;
+    if (this.watcher || !this.sources.has("memory")) {
+      return;
+    }
 
     const memDir = path.join(this.workspaceDir, "memory");
     const memFile = path.join(this.workspaceDir, "MEMORY.md");
@@ -703,7 +731,9 @@ export class PostgresMemoryManager implements MemorySearchManager {
       }
     });
 
-    if (watchPaths.length === 0) return;
+    if (watchPaths.length === 0) {
+      return;
+    }
 
     this.watcher = chokidar.watch(watchPaths, {
       ignoreInitial: true,
